@@ -54,35 +54,6 @@
 
 #include "kvm_onhyperv.h"
 #include "svm_onhyperv.h"
-/* ---- CMPE283 A2: exit counters ---- */
-#include <linux/spinlock.h>
-#include <linux/printk.h>
-
-#define CMPE283_MAX_EXIT 1024
-static u64 cmpe283_exit_counts[CMPE283_MAX_EXIT];
-static u64 cmpe283_exit_total;
-static DEFINE_SPINLOCK(cmpe283_lock);
-
-static void cmpe283_account_and_maybe_dump(unsigned int reason)
-{
-    unsigned long flags;
-    spin_lock_irqsave(&cmpe283_lock, flags);
-
-    if (reason < CMPE283_MAX_EXIT) ++cmpe283_exit_counts[reason];
-    ++cmpe283_exit_total;
-
-    if ((cmpe283_exit_total % 10000ULL) == 0) {
-        unsigned int i;
-        pr_info("CMPE283: ---- exit dump @ total=%llu ----\n", cmpe283_exit_total);
-        for (i = 0; i < CMPE283_MAX_EXIT; ++i) {
-            if (!cmpe283_exit_counts[i]) continue;
-            pr_info("CMPE283: exit=%u name=%s count=%llu\n",
-                    i, "UNKNOWN", cmpe283_exit_counts[i]);
-        }
-    }
-    spin_unlock_irqrestore(&cmpe283_lock, flags);
-}
-/* ---- end CMPE283 A2 ---- */
 
 MODULE_AUTHOR("Qumranet");
 MODULE_DESCRIPTION("KVM support for SVM (AMD-V) extensions");
@@ -3546,8 +3517,6 @@ static int svm_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct kvm_run *kvm_run = vcpu->run;
 	u32 exit_code = svm->vmcb->control.exit_code;
-	cmpe283_account_and_maybe_dump(exit_code);
-
 
 	/* SEV-ES guests must use the CR write traps to track CR registers. */
 	if (!sev_es_guest(vcpu->kvm)) {
