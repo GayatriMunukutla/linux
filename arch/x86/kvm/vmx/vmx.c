@@ -75,6 +75,35 @@
 #include "posted_intr.h"
 
 #include "mmu/spte.h"
+/* ---- CMPE283 A2: exit counters ---- */
+#include <linux/spinlock.h>
+#include <linux/printk.h>
+
+#define CMPE283_MAX_EXIT 1024
+static u64 cmpe283_exit_counts[CMPE283_MAX_EXIT];
+static u64 cmpe283_exit_total;
+static DEFINE_SPINLOCK(cmpe283_lock);
+
+static void cmpe283_account_and_maybe_dump(unsigned int reason)
+{
+    unsigned long flags;
+    spin_lock_irqsave(&cmpe283_lock, flags);
+
+    if (reason < CMPE283_MAX_EXIT) ++cmpe283_exit_counts[reason];
+    ++cmpe283_exit_total;
+
+    if ((cmpe283_exit_total % 10000ULL) == 0) {
+        unsigned int i;
+        pr_info("CMPE283: ---- exit dump @ total=%llu ----\n", cmpe283_exit_total);
+        for (i = 0; i < CMPE283_MAX_EXIT; ++i) {
+            if (!cmpe283_exit_counts[i]) continue;
+            pr_info("CMPE283: exit=%u name=%s count=%llu\n",
+                    i, "UNKNOWN", cmpe283_exit_counts[i]);
+        }
+    }
+    spin_unlock_irqrestore(&cmpe283_lock, flags);
+}
+/* ---- end CMPE283 A2 ---- */
 
 MODULE_AUTHOR("Qumranet");
 MODULE_DESCRIPTION("KVM support for VMX (Intel VT-x) extensions");
@@ -7330,6 +7359,10 @@ static noinstr void vmx_vcpu_enter_exit(struct kvm_vcpu *vcpu,
 	 * and is affected by MMIO Stale Data. In such cases mitigation in only
 	 * needed against an MMIO capable guest.
 	 */
+
+	 /* Mask off failure/interrupt info bits; keep the basic 16-bit reason. */
+	cmpe283_account_and_maybe_dump(cmpe283_reason);
+
 	if (static_branch_unlikely(&vmx_l1d_should_flush))
 		vmx_l1d_flush(vcpu);
 	else if (static_branch_unlikely(&cpu_buf_vm_clear) &&
@@ -7356,9 +7389,17 @@ static noinstr void vmx_vcpu_enter_exit(struct kvm_vcpu *vcpu,
 		goto out;
 	}
 
-	vmx->vt.exit_reason.full = vmcs_read32(VM_EXIT_REASON);
-	if (likely(!vmx_get_exit_reason(vcpu).failed_vmentry))
+	union vmx_exit_reason r;	
+	r.full = vmcs_read32(VM_EXIT_REASON);
+	vmx->vt.exit_reason = r;
+
+	/* count only genuine VM-exits (skip failed VM-entry) */
+	if (likely(!r.failed_vmentry))
+		cmpe283_account_and_maybe_dump(r.basic);
+
+	if (likely(!r.failed_vmentry))
 		vmx->idt_vectoring_info = vmcs_read32(IDT_VECTORING_INFO_FIELD);
+
 
 	vmx_handle_nmi(vcpu);
 
