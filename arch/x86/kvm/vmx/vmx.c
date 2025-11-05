@@ -14,6 +14,7 @@
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+
 #include <linux/highmem.h>
 #include <linux/hrtimer.h>
 #include <linux/kernel.h>
@@ -76,9 +77,23 @@
 
 #include "mmu/spte.h"
 
+#include <linux/atomic.h>
+
+/* ---- VM-Exit stats (student patch) ---- */
+#define KVM_VMX_MAX_EXIT_REASONS 128
+#define KVM_VMX_PRINT_INTERVAL   1000
+
+static atomic64_t kvm_vmx_exit_total = ATOMIC64_INIT(0);
+static atomic64_t kvm_vmx_exit_counts[KVM_VMX_MAX_EXIT_REASONS];
+
+
+
 MODULE_AUTHOR("Qumranet");
 MODULE_DESCRIPTION("KVM support for VMX (Intel VT-x) extensions");
 MODULE_LICENSE("GPL");
+
+
+
 
 #ifdef MODULE
 static const struct x86_cpu_id vmx_cpu_id[] = {
@@ -177,6 +192,8 @@ module_param(allow_smaller_maxphyaddr, bool, S_IRUGO);
  * Time is measured based on a counter that runs at the same rate as the TSC,
  * refer SDM volume 3b section 21.6.13 & 22.1.3.
  */
+
+
 static unsigned int ple_gap = KVM_DEFAULT_PLE_GAP;
 module_param(ple_gap, uint, 0444);
 
@@ -209,6 +226,41 @@ static DEFINE_MUTEX(vmx_l1d_flush_mutex);
 
 /* Storage for pre module init parameter parsing */
 static enum vmx_l1d_flush_state __read_mostly vmentry_l1d_flush_param = VMENTER_L1D_FLUSH_AUTO;
+
+
+
+static const char *vmx_exit_reason_name(unsigned int r)
+{
+    switch (r) {
+    case 9:  return "CPUID";
+    case 12: return "HLT";
+    case 20: return "IO_INSTRUCTION";
+    case 30: return "RDMSR";
+    case 31: return "WRMSR";
+    case 48: return "EPT_VIOLATION";
+    case 49: return "EPT_MISCONFIG";
+    case 59: return "RDTSC";
+    default: return "UNKNOWN";
+    }
+}
+
+
+static void kvm_vmx_maybe_dump_counts(void)
+{
+    u64 total = (u64)atomic64_read(&kvm_vmx_exit_total);
+    if (total % KVM_VMX_PRINT_INTERVAL)
+        return;
+
+    pr_info("KVM/VMX: ===== VM-Exit stats (total=%llu) =====\n",
+            (unsigned long long)total);
+
+    for (unsigned int i = 0; i < KVM_VMX_MAX_EXIT_REASONS; i++) {
+        u64 c = (u64)atomic64_read(&kvm_vmx_exit_counts[i]);
+        if (!c) continue;
+        pr_info("KVM/VMX: exit=%u (%s) count=%llu\n",
+                i, vmx_exit_reason_name(i), (unsigned long long)c);
+    }
+}
 
 static const struct {
 	const char *option;
@@ -6472,12 +6524,21 @@ void dump_vmcs(struct kvm_vcpu *vcpu)
  * The guest has exited.  See if we can fix it or if we need userspace
  * assistance.
  */
+
 static int __vmx_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	union vmx_exit_reason exit_reason = vmx_get_exit_reason(vcpu);
 	u32 vectoring_info = vmx->idt_vectoring_info;
 	u16 exit_handler_index;
+	u32 basic = exit_reason.basic;
+	 /* === KVM Exit Statistics Patch === */
+          if (basic < KVM_VMX_MAX_EXIT_REASONS)
+              atomic64_inc(&kvm_vmx_exit_counts[basic]);
+          atomic64_inc(&kvm_vmx_exit_total);
+          kvm_vmx_maybe_dump_counts();
+            /* ============================================= */
+
 
 	/*
 	 * Flush logged GPAs PML buffer, this will make dirty_bitmap more
@@ -8692,6 +8753,7 @@ void vmx_exit(void)
 
 int __init vmx_init(void)
 {
+pr_info("KVM/VMX: stats patch loaded (vmx_init beacon)\n");
 	int r, cpu;
 
 	KVM_SANITY_CHECK_VM_STRUCT_SIZE(kvm_vmx);
