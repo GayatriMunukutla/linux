@@ -79,7 +79,7 @@
 
 #include <linux/atomic.h>
 
-/* ---- VM-Exit stats (student patch) ---- */
+/*----- VM-Exit stats (student patch) ---- */
 #define KVM_VMX_MAX_EXIT_REASONS 128
 #define KVM_VMX_PRINT_INTERVAL   1000
 
