@@ -1,18 +1,64 @@
-Linux kernel
-============
+**1. Team Member Contributions**
 
-There are several guides for kernel developers and users. These guides can
-be rendered in a number of formats, like HTML and PDF. Please read
-Documentation/admin-guide/README.rst first.
+This assignment was completed individually by me.
+I was responsible for researching how KVM handles VM exits within the Linux kernel, identifying where to instrument the exit counter logic, writing and integrating the new code for tracking and printing statistics, configuring and building the modified kernel, testing it with nested virtualization, and validating results through dmesg output.
+All analysis, documentation, and testing steps were performed solely by me.
 
-In order to build the documentation, use ``make htmldocs`` or
-``make pdfdocs``.  The formatted documentation can also be read online at:
+**2. Detailed Steps to Complete the Assignment**
 
-    https://www.kernel.org/doc/html/latest/
+Below are the exact steps followed to complete and verify the assignment.
+They are written as a recipe that can be replicated by another developer.
+    (1)Environment Preparation:
+        -I began with a working Assignment 1 environment, where nested virtualization was already enabled.
+        -Forked the official Linux kernel repository from "https://github.com/torvalds/linux" into my GitHub account.
+        -Cloned my fork into the outer VM with the command "git clone https://github.com/GayatriMunukutla/linux.git".
+    (2)Kernel Configuration
+        -Ran the configuration menu to ensure all required KVM options were enabled with "make menuconfig"
+        -Used local configuration to match the outer VM’s environment: "make localmodconfig"
+        -Verified that Intel and AMD KVM options were active in .config with "grep -E '^(CONFIG_KVM|CONFIG_KVM_INTEL|CONFIG_KVM_AMD)=' .config"
+    (3)Code Modifications
+        -Created a new helper function in arch/x86/kvm/vmx/vmx.c named "cmpe283_account_and_maybe_dump(unsigned int reason)" to maintain:
+            =>A counter per exit type.
+            =>A total exit counter.
+        -Configured it to print all non-zero exit counts every 10,000 total exits with "pr_info()".
+        -Integrated the function into both the Intel and AMD KVM paths:
+            =>Intel (VMX): arch/x86/kvm/vmx/vmx.c
+            =>AMD (SVM): arch/x86/kvm/svm/svm.c
+        -Verified the code compiled successfully and didn’t break existing functionality.
+    (4)Kernel Build, Install, and Reboot
+        -Built the kernel using all available CPU cores with "make -j$(nproc)"
+        -Installed the compiled modules and kernel image with "sudo make modules_install" and "sudo make install"
+        -Updated GRUB to add the new kernel entry with "sudo update-grub"
+        -Rebooted the system into the newly built kernel with "sudo reboot"
+        -Verified the running kernel version with "uname -r"
+        -Output confirmed the custom kernel version: 6.18.0-rc1+
+    (5)Testing and Validation
+        -Started the inner VM to trigger VM exit events.
+        -Monitored exit data from the outer VM with "sudo dmesg -w | grep -i "KVM/VMX:" "
+        -Observed periodic messages every 10,000 exits, such as:
+            KVM/VMX: ----- VM-Exit stats (total=39000) -----
+            KVM/VMX: exit=0 count=15
+            KVM/VMX: exit=10 (HLT) count=2400
+            KVM/VMX: exit=28 (RDMSR) count=19400
+            KVM/VMX: exit=48 (EPT_VIOLATION) count=698
+            KVM/VMX: exit=49 (EPT_MISCONFIG) count=4148
+        -Confirmed that the dump occurred at consistent intervals and all counters were accurate.
+    (6)Version Control
+        -Committed and pushed all changes to a dedicated Git branch for submission
 
-There are various text files in the Documentation/ subdirectory,
-several of them using the reStructuredText markup notation.
+ **3. Frequency of Exits**
 
-Please read the Documentation/process/changes.rst file, as it contains the
-requirements for building and running the kernel, and information about
-the problems which may result by upgrading your kernel.
+The total number of VM exits increased steadily as the guest OS executed instructions.
+However, the frequency was not uniform - there were bursts of exits during certain VM operations:
+    -During guest boot-up, the number of exits spiked due to frequent MSR reads and page table handling.
+    -During idle periods, exits slowed down, with most triggered by HLT instructions.
+A full inner-VM boot generated approximately 19,000–39,000 exits, depending on the guest workload and startup processes.
+
+**4. Most and Least Frequent Exit Types**
+RDMSR - Very Frequent
+HLT - Frequent
+EPT_VIOLATION - Frequent
+EPT_MISCONFIG - Moderate
+WRMSR - Rare
+EXTERNAL_INTERRUPT - Least Frequent
+
